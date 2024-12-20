@@ -1,46 +1,21 @@
-{{- if and (not .Values.statefulset.enabled) (or (not .Values.bluegreen.disablePrimaryDeployment) (eq (len .Values.bluegreen.imageTags) 0)) -}}
-{{- if and (.Values.deploymentStrategy) (eq .Values.deploymentStrategy.kind "blueGreen") }}
-apiVersion: argoproj.io/v1alpha1
-kind: Rollout
-{{- else }}
 apiVersion: apps/v1
 kind: Deployment
-{{- end }}
 metadata:
   name: {{ include "docker-template.fullname" . }}
   labels:
     {{- include "docker-template.labels" . | nindent 4 }}
-    {{- if .Values.labels }}
-    {{- toYaml .Values.labels | nindent 4 }}
-    {{- end }}
+    tags.datadoghq.com/env: {{ .Values.datadog.env }}
+    tags.datadoghq.com/service: {{ .Values.datadog.service }}
+    tags.datadoghq.com/version: "{{ .Values.image.tag }}"
 spec:
-  {{- if and (.Values.deploymentStrategy) (eq .Values.deploymentStrategy.kind "blueGreen") }}
-  strategy:
-    blueGreen: 
-      activeService: {{ include "docker-template.fullname" . }}
-      autoPromotionEnabled: true
-      scaleDownDelayRevisionLimit: 5
-      previewMetadata:
-        labels:
-          role: preview
-      prePromotionAnalysis:
-        analysisRunMetadata:
-          labels:
-            {{- include "docker-template.labels" . | nindent 12 }}
-            {{- if .Values.labels }}
-            {{- toYaml .Values.labels | nindent 12 }}
-            {{- end }}
-        templates:
-        - templateName: {{ include "docker-template.fullname" . }}-bluegreen
-  {{- end }}
   {{- if not .Values.autoscaling.enabled }}
-  {{- if not .Values.keda.enabled }}
   replicas: {{ .Values.replicaCount }}
-  {{ end }}
   {{ end }}
   selector:
     matchLabels:
       {{- include "docker-template.selectorLabels" . | nindent 6 }}
+  strategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
   template:
     metadata:
       annotations:
@@ -48,102 +23,139 @@ spec:
         {{- with .Values.podAnnotations }}
           {{- toYaml . | nindent 8 }}
         {{- end }}
+        {{- if and (contains "puma" .Values.container.command) (contains "--control-url" .Values.container.command)}}
+        {{- $pumaport := regexFind "--control-url tcp://([0-9]{1,3})\\.([0-9]{1,3})\\.([0-9]{1,3})\\.([0-9]{1,3})\\:([0-9]{1,4})" .Values.container.command | split ":"}}
+        ad.datadoghq.com/{{ .Chart.Name }}.check_names: '["puma"]'
+        ad.datadoghq.com/{{ .Chart.Name }}.init_configs: "[{}]"
+        ad.datadoghq.com/{{ .Chart.Name }}.instances: |
+          [
+            {
+              "control_url": "http://%%host%%:{{ $pumaport._2 }}/stats?token=%%env_puma_control_token%%"
+            }
+          ]
+        {{- end }}
       labels:
         {{- include "docker-template.selectorLabels" . | nindent 8 }}
-        {{- if .Values.podLabels }}
-        {{- toYaml .Values.podLabels | nindent 8 }}
+        {{- .Values.podLabels | toYaml | nindent 8 }}
+        tags.datadoghq.com/env: {{ .Values.datadog.env }}
+        tags.datadoghq.com/service: {{ .Values.datadog.service }}
+        tags.datadoghq.com/version: "{{ .Values.image.tag }}"
+        {{- if ((.Values.sidekiq).ui).enabled }}
+        extras.carerev.com/sidekiq: "true"
         {{- end }}
-        {{- if .Values.stack.enabled }}
-        porter.run/stack-name: "{{ .Values.stack.name }}"
-        {{- end }}
-        porter.run/application-name: "{{ .Release.Name }}"
     spec:
-      {{- if .Values.affinity }}
       affinity:
-        {{- toYaml .Values.affinity | nindent 8 }}
-      {{- else if .Values.nodeGroups }}
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: porter.run/node-group-id
-                    operator: In
-                    values:
-                        {{- range $nodeGroup := .Values.nodeGroups }}
-                      - {{ $nodeGroup.id | quote }}
-                        {{- end }}
-      {{- end }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                      - {{ include "docker-template.name" . }}
+                    - key: app.kubernetes.io/instance
+                      operator: In
+                      values:
+                      - {{ .Release.Name }}
+                topologyKey: failure-domain.beta.kubernetes.io/zone
+              weight: 100
+            - podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                      - {{ include "docker-template.name" . }}
+                    - key: app.kubernetes.io/instance
+                      operator: In
+                      values:
+                      - {{ .Release.Name }}
+                topologyKey: kubernetes.io/hostname
+              weight: 100
       serviceAccountName: {{ include "docker-template.serviceAccountName" . }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
-      hostAliases:
-        {{- toYaml .Values.hostAliases | nindent 8 }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- if .Values.enableEDNS0 }}
+      volumes:
+      {{- range .Values.volumes.emptyDir }}
+        - name: {{ .name }}
+          emptyDir: {}
+      {{- end }}
+      {{- if ((.Values.sidekiq).ui).enabled }}
+        - name: sidekiq-ui-auth
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: "{{ include "docker-template.fullname" . }}-sidekiq-ui-auth"
+      {{- end }}
       dnsConfig:
         options:
-          - name: edns0
-      {{- end }}
-      {{- if and .Values.image .Values.image.imagePullSecret }}
-      imagePullSecrets:
-        - name: {{ .Values.image.imagePullSecret }}
-      {{- else if and .Values.global  .Values.global.image .Values.global.image.imagePullSecret }}
-      imagePullSecrets:
-        - name: {{ .Values.global.image.imagePullSecret }}
-      {{- end }}
+          - name: ndots
+            value: "1"
       initContainers:
-        # this is used for ensuring the kubelet is ready on new nodes, and can injected any downward API keys
-        - name: downward-api
-          env:
-          - name: DOWNWARD_API_ENV_KEY
-            value: DOWNWARD_HOST_IP
-          - name: DOWNWARD_HOST_IP
-            valueFrom:
-              fieldRef:
-                apiVersion: v1
-                fieldPath: status.hostIP
-          image: ghcr.io/porter-dev/downward-api-init:latest
-          imagePullPolicy: IfNotPresent
-      containers:
-        - name: {{ .Chart.Name }}
+        - name: emptydir-remove-other-permissions
+          image: busybox
+          command:
+            - /bin/chmod
+            - +t
+          {{- range $emptyDirs := .Values.volumes.emptyDir }}
+            {{- range $emptyDirs.mountPaths }}
+            - {{ . }}
+            {{- end }}
+          {{- end }}
           securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
-          {{- if .Values.global }}
-          {{- if .Values.global.image }}
-          image: "{{ .Values.global.image.repository }}:{{ .Values.global.image.tag }}"
+            runAsUser: 0
+            privileged: true
+            runAsNonRoot: false
+          volumeMounts:
+          {{- range $emptyDirs := .Values.volumes.emptyDir }}
+            {{- range $emptyDirs.mountPaths }}
+            - name: {{ $emptyDirs.name }}
+              mountPath: {{ . }}
+            {{- end }}
           {{- end }}
-          {{- else }}
+        - name: istio-init
+          image: auto
+          resources:
+          {{- toYaml .Values.istio.init.resources | nindent 12 }}
+      containers:
+        - name: istio-proxy
+          image: auto
+          resources:
+          {{- toYaml .Values.istio.sidecar.resources | nindent 12 }}
+          {{- if ((.Values.sidekiq).ui).enabled }}
+          volumeMounts:
+          - name: sidekiq-ui-auth
+            readOnly: true
+            mountPath: /etc/istio/config/sidekiq-ui/
+          {{- end }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 20; curl -X POST localhost:15000/drain_listeners?inboundonly; while [ $(netstat -plunt | grep tcp | grep -v envoy | grep -v pilot-agent | wc -l | xargs) -ne 0 ]; do sleep 1; done"]
+        - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-          {{- end }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          {{- if .Values.global }}
-          {{- if .Values.global.image }}
-          {{- if and .Values.container.command (not (eq .Values.global.image.repository "public.ecr.aws/o1j4x7p4/hello-porter")) }}
+          {{- if and .Values.container.command (not (or (eq .Values.image.repository "porterdev/hello-porter") (eq .Values.image.repository "public.ecr.aws/o1j4x7p4/hello-porter"))) }}
           command:
           {{- range $command := trim .Values.container.command | splitList " " }}
           - {{ $command | quote }}
           {{- end }}
-          {{- end }}
-          {{- end }}
-          {{- else }}
-          {{- if (and .Values.container.command (not (or (eq .Values.image.repository "porterdev/hello-porter") (eq .Values.image.repository "public.ecr.aws/o1j4x7p4/hello-porter")))) }}
-          command:
-          {{- range $command := trim .Values.container.command | splitList " " }}
-          - {{ $command | quote }}
-          {{- end }}
-          {{- end }}
-          {{- end }}
-          {{- if .Values.container.argList }}
-          args:
-          {{- range $arg := .Values.container.argList }}
-          - {{ $arg | quote }}
-          {{- end }}
-          {{- else if .Values.container.args }}
+          {{- if .Values.container.args }}
           args:
           {{- range $args := trim .Values.container.args | splitList " " }}
           - {{ $args | quote }}
           {{- end }}
+          {{- end }}
+          {{- end }}
+          volumeMounts:
+          {{- range $emptyDirs := .Values.volumes.emptyDir }}
+            {{- range $emptyDirs.mountPaths }}
+            - name: {{ $emptyDirs.name }}
+              mountPath: {{ . }}
+            {{- end }}
           {{- end }}
           {{- if or (.Values.container.lifecycle.postStart) (.Values.container.lifecycle.preStop) }}
           lifecycle:
@@ -164,16 +176,12 @@ spec:
                 {{- end }}
             {{- end }}
           {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ .Values.container.port }}
               protocol: TCP
-            {{- if and .Values.metricsScraping.enabled (ne .Values.metricsScraping.port .Values.container.port) }}
-            # if metrics scraping is enabled and the port is not the same as the container port, add a metrics port
-            - name: metrics
-              containerPort: {{ .Values.metricsScraping.port }}
-              protocol: TCP
-            {{- end }}
             {{- range .Values.container.extraPorts }}
             - name: {{ .name }}
               containerPort: {{ .containerPort }}
@@ -184,23 +192,15 @@ spec:
             httpGet:
               path: {{ .Values.health.livenessProbe.path }}
               scheme: {{ .Values.health.livenessProbe.scheme }}
-              port: {{ .Values.health.livenessProbe.port | default "http" }}
-              {{ if or (.Values.health.livenessProbe.httpHeaders) (.Values.health.livenessProbe.auth.enabled) }}
+              port: {{ .Values.health.livenessProbe.port }}
+              {{ if .Values.health.livenessProbe.auth.enabled }}
               httpHeaders:
-                {{ if .Values.health.livenessProbe.auth.enabled }}
                 - name: Authorization
                   value: Basic {{ printf "%s:%s" .Values.health.livenessProbe.auth.username .Values.health.livenessProbe.auth.password | b64enc }}
-                {{ end }}
-                {{- range .Values.health.livenessProbe.httpHeaders }}
-                - name: {{ .name }}
-                  value: {{ .value }}
-                {{- end }}
               {{ end }}
-            initialDelaySeconds: {{ .Values.health.livenessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.health.livenessProbe.periodSeconds }}
-            timeoutSeconds: {{ .Values.health.livenessProbe.timeoutSeconds }}
-            successThreshold: {{ .Values.health.livenessProbe.successThreshold }}
             failureThreshold: {{ .Values.health.livenessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.health.livenessProbe.timeoutSeconds }}
           {{ end }}
           {{ if .Values.health.livenessCommand.enabled }}
           livenessProbe:
@@ -211,103 +211,47 @@ spec:
                 {{- end }}
             initialDelaySeconds: {{ .Values.health.livenessCommand.initialDelaySeconds }}
             periodSeconds: {{ .Values.health.livenessCommand.periodSeconds }}
-            timeoutSeconds: {{ .Values.health.livenessCommand.timeoutSeconds }}
-            successThreshold: {{ .Values.health.livenessCommand.successThreshold }}
-            failureThreshold: {{ .Values.health.livenessCommand.failureThreshold }}
           {{ end }}
           {{ if .Values.health.readinessProbe.enabled }}
           readinessProbe:
             httpGet:
               path: {{ .Values.health.readinessProbe.path }}
               scheme: {{ .Values.health.readinessProbe.scheme }}
-              port: {{ .Values.health.readinessProbe.port | default "http" }}
-              {{ if or (.Values.health.readinessProbe.httpHeaders) (.Values.health.readinessProbe.auth.enabled) }}
+              port: {{ .Values.health.readinessProbe.port }}
+              {{ if .Values.health.readinessProbe.auth.enabled }}
               httpHeaders:
-                {{ if .Values.health.readinessProbe.auth.enabled }}
                 - name: Authorization
                   value: Basic {{ printf "%s:%s" .Values.health.readinessProbe.auth.username .Values.health.readinessProbe.auth.password | b64enc }}
-                {{ end }}
-                {{- range .Values.health.readinessProbe.httpHeaders }}
-                - name: {{ .name }}
-                  value: {{ .value }}
-                {{- end }}
               {{ end }}
-            initialDelaySeconds: {{ .Values.health.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.health.readinessProbe.periodSeconds }}
             timeoutSeconds: {{ .Values.health.readinessProbe.timeoutSeconds }}
-            successThreshold: {{ .Values.health.readinessProbe.successThreshold }}
-            failureThreshold: {{ .Values.health.readinessProbe.failureThreshold }}
           {{ end }}
           {{ if .Values.health.startupProbe.enabled }}
           startupProbe:
             httpGet:
               path: {{ .Values.health.startupProbe.path }}
               scheme: {{ .Values.health.startupProbe.scheme }}
-              port: {{ .Values.health.startupProbe.port | default "http" }}
-              {{ if or (.Values.health.startupProbe.httpHeaders) (.Values.health.startupProbe.auth.enabled) }}
+              port: {{ .Values.health.startupProbe.port }}
+              {{ if .Values.health.startupProbe.auth.enabled }}
               httpHeaders:
-                {{ if .Values.health.startupProbe.auth.enabled }}
                 - name: Authorization
                   value: Basic {{ printf "%s:%s" .Values.health.startupProbe.auth.username .Values.health.startupProbe.auth.password | b64enc }}
-                {{ end }}
-                {{- range .Values.health.startupProbe.httpHeaders }}
-                - name: {{ .name }}
-                  value: {{ .value }}
-                {{- end }}
               {{ end }}
-            initialDelaySeconds: {{ .Values.health.startupProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.health.startupProbe.periodSeconds }}
-            timeoutSeconds: {{ .Values.health.startupProbe.timeoutSeconds }}
-            successThreshold: {{ .Values.health.startupProbe.successThreshold }}
             failureThreshold: {{ .Values.health.startupProbe.failureThreshold }}
-          {{ end }}
-          {{ if .Values.health.overrides }}
-            {{- toYaml .Values.health.overrides.probes | nindent 10 }}
+            timeoutSeconds: {{ .Values.health.startupProbe.timeoutSeconds }}
           {{ end }}
           resources:
             requests:
               cpu: {{ .Values.resources.requests.cpu }}
               memory: {{ .Values.resources.requests.memory }}
-          {{ if .Values.resources.requests }}
-          {{ if .Values.resources.requests.nvidiaGpu }}
-              nvidia.com/gpu: {{ .Values.resources.requests.nvidiaGpu }}
-          {{ end }}
-          {{ end }}
             limits:
-              {{- if .Values.resources.setCPULimits }}
-                {{- if .Values.resources.limits.cpu }}
+              memory: {{ ((.Values.resources).limits).memory | default .Values.resources.requests.memory }}
+              {{- if ((.Values.resources).limits).cpu }}
               cpu: {{ .Values.resources.limits.cpu }}
-                {{- else }}
-              cpu: {{ .Values.resources.requests.cpu }}
-                {{- end }}
               {{- end }}
-              {{- if .Values.resources.limits.memory }}
-              memory: {{ .Values.resources.limits.memory }}
-              {{- else }}
-              memory: {{ .Values.resources.requests.memory }}
-              {{- end }}
-              {{- if .Values.resources.limits.nvidiaGpu }}
-              nvidia.com/gpu: {{ .Values.resources.limits.nvidiaGpu }}
-              {{- end }}
-          {{ if or .Values.configMapRefs .Values.secretRefs }}
-          envFrom:
-          {{ range $configMapName := .Values.configMapRefs }}
-            - configMapRef:
-                name: {{ $configMapName }}
-          {{ end }}
-          {{ range $secretName := .Values.secretRefs }}
-            - secretRef:
-                name: {{ $secretName }}
-          {{ end }}
-          {{ end }}
           env:
             # Porter default environment variables
-            - name: PORTER_RESOURCES_RAM
-              value: "{{ .Values.resources.requests.memory }}"
-            - name: PORTER_RESOURCES_CPU
-              value: "{{ .Values.resources.requests.cpu }}"
-            - name: PORTER_RESOURCES_REPLICAS
-              value: "{{ .Values.replicaCount }}"
             - name: PORTER_NODE_NAME
               valueFrom:
                 fieldRef:
@@ -320,40 +264,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-            - name: PORTER_NODE_IP
-              valueFrom:
-                fieldRef:
-                  fieldPath: status.hostIP
             - name: PORTER_POD_IMAGE_TAG
               value: "{{ .Values.image.tag }}"
-            {{- if .Values.awsEfsStorage }}
-            {{- range .Values.awsEfsStorage }}
-            - name: PORTER_EFS_FILESYSTEM_ID_{{ upper $.Values.fullnameOverride | replace " " "_" | replace "-" "_" }}
-              value: {{ .fileSystemId }}
-            {{- end }}
-            {{- end }}
-            {{- if .Values.global }}
-            {{- if .Values.global.image }}
-            {{- if .Values.global.image.tag }}
-            - name: PORTER_IMAGE_TAG
-              value: "{{ .Values.global.image.tag }}"
-            {{- end }}
-            {{- end }}
-            {{- end }}
-            {{ if and (.Values.ingress) (.Values.ingress.hosts) }}
-            - name: PORTER_DOMAINS
-              value: "{{ .Values.ingress.hosts | join "," }}"
-            {{ end }}
             - name: PORTER_POD_REVISION
               value: "{{ .Release.Revision }}"
-            - name: PORTER_APP_SERVICE_NAME
-              value: "{{ include "docker-template.fullname" . }}"
-            {{- if .Values.stack.enabled }}
-            - name: PORTER_STACK_NAME
-              value: "{{ .Values.stack.name }}"
-            - name: PORTER_STACK_REVISION
-              value: "{{ .Values.stack.revision }}"
-            {{- end }}
             {{- range $key, $val := .Values.container.env.normal }}
             - name: {{ $key }}
             {{- $splVal := split "_" $val -}}
@@ -366,12 +280,6 @@ spec:
               value: {{ quote $val }}
             {{- end }}
             {{- end }}
-            {{ if .Values.datadog.enabled }}
-            - name: DD_AGENT_HOST
-              valueFrom:
-                fieldRef:
-                  fieldPath: status.hostIP
-            {{ end }}
             {{- range $syncedEnv := .Values.container.env.synced }}
             {{- range $key := $syncedEnv.keys }}
             - name: {{ $key.name }}
@@ -388,153 +296,11 @@ spec:
               {{- end }}
             {{- end }}
             {{- end }}
-            {{- if or (eq .Values.image.repository "porterdev/hello-porter") (eq .Values.image.repository "public.ecr.aws/o1j4x7p4/hello-porter") }}
             - name: PORT
               value: {{ .Values.container.port | quote }}
-            {{- end }}
-        {{ if .Values.datadogSocketVolume.enabled }}
-          volumeMounts:
-            - name: datadog-apm-socket
-              mountPath: /var/run/datadog/apm.socket
-            - name: datadog-dsd-socket
-              mountPath: /var/run/datadog/dsd.socket
-        {{ end }}
-        {{ if .Values.awsEfsStorage }}
-          volumeMounts:
-        {{- range $v := .Values.awsEfsStorage }}
-          - name: efs-{{ $.Values.fullnameOverride }}
-            mountPath: /data/efs/{{ $.Values.fullnameOverride }}
-        {{ end }}   
-        {{ end }}  
-          {{ if .Values.pvc.enabled }}
-          volumeMounts:
-            - name: "{{ include "docker-template.fullname" . }}-storage"
-              mountPath: {{ .Values.pvc.mountPath }}
-          {{ end }}
-          {{ if .Values.emptyDir.enabled }}
-          volumeMounts:
-            - name: "{{ include "docker-template.fullname" . }}-empty-dir-storage"
-              mountPath: {{ .Values.emptyDir.mountPath }}
-          {{ end }}
-          {{ if and .Values.fileSecretMounts .Values.fileSecretMounts.enabled }}
-          {{ range .Values.fileSecretMounts.mounts }}
-          volumeMounts:
-            - name: {{ .mountPath }}
-              mountPath: "/etc/secrets/{{ .mountPath }}"
-              readOnly: true
-          {{ end }}
-          {{ end }}
-        {{- if .Values.cloudsql.enabled }}
-        - name: cloud-sql-proxy
-          image: gcr.io/cloudsql-docker/gce-proxy:1.17
-          command:
-            - "/cloud_sql_proxy"
-            - "-instances={{- include "cloudsql.connectionString" . -}}"
-            - "-credential_file=/secrets/service_account.json"
-            {{ if .Values.terminationGracePeriodSeconds }}
-            - "-term_timeout={{ .Values.terminationGracePeriodSeconds }}s"
-            {{ end }}
-          securityContext:
-            runAsNonRoot: true
-          resources:
-            limits:
-              memory: 2Gi
-              cpu: 4
-            requests:
-              memory: 128Mi
-              cpu: 0.1
-          volumeMounts:
-          - name: "sidecar-volume-{{ include "docker-template.fullname" . }}"
-            mountPath: /secrets/
-            readOnly: true
-        {{ end }}
       {{- if gt (len .Values.nodeSelector) 0}}
       nodeSelector:
         {{- range $k, $v := .Values.nodeSelector }}
         {{ $k }}: {{ $v }}
         {{- end }}
       {{- end }}
-      {{- if .Values.priorityClassName }}
-      priorityClassName: {{ .Values.priorityClassName }}
-      {{- end }}
-      tolerations:
-        - key: "removable"
-          operator: "Equal"
-          value: "true"
-          effect: "NoSchedule"
-      {{- if .Values.tolerations }}
-        {{- toYaml .Values.tolerations | nindent 8 }}
-      {{- end }}
-      {{- range $nodeGroup := .Values.nodeGroups }}
-        - key: "porter.run/node-group-id"
-          operator: "Equal"
-          value: {{ $nodeGroup.id | quote }}
-          effect: "NoSchedule"
-      {{- end }}
-      # nvidia.com/gpu toleration is automatically injected in EKS/GKE, but not in AKS 
-      # since we want to be cloud agnostic, we just add it ourselves wherever we need it
-      {{- if .Values.resources.requests.nvidiaGpu}}
-        - key: "nvidia.com/gpu"
-          operator: "Exists"
-          effect: "NoSchedule"
-      {{- end }}
-      {{- if .Values.topology.enabled }}
-      topologySpreadConstraints: 
-        - maxSkew: {{ .Values.topology.maxSkew }}
-          topologyKey: {{ .Values.topology.topologyKey }}
-          whenUnsatisfiable: {{ .Values.topology.whenUnsatisfiable }}
-          {{- if .Values.topology.labelSelector.enabled }}
-          labelSelector: 
-            matchLabels:
-              {{- range $k, $v := .Values.topology.labelSelector.matchLabels }}
-              {{ $k }}: {{ $v }}
-              {{- end }}
-          {{- end }}
-      {{ end }}
-      {{ if or .Values.pvc.enabled .Values.cloudsql.enabled .Values.emptyDir.enabled .Values.fileSecretMounts.enabled .Values.awsEfsStorage .Values.datadogSocketVolume.enabled }}
-      volumes:
-        {{ if .Values.datadogSocketVolume.enabled }}
-        - hostPath:
-            path: /var/run/datadog/apm.socket
-            type: Socket
-          name: datadog-apm-socket
-        - hostPath:
-            path: /var/run/datadog/dsd.socket
-            type: Socket
-          name: datadog-dsd-socket
-        {{ end }}
-        {{ if .Values.cloudsql.enabled }}
-        - name: "sidecar-volume-{{ include "docker-template.fullname" . }}"
-          secret:
-            secretName: "{{ include "cloudsql.serviceAccountJSONSecret" . }}"
-        {{ end }}
-        {{ if .Values.pvc.enabled }}
-        - name: "{{ include "docker-template.fullname" . }}-storage"
-          persistentVolumeClaim:
-        {{ if not (eq .Values.pvc.existingVolume "")}}
-            claimName: {{ .Values.pvc.existingVolume }}
-        {{ else }}
-            claimName: "{{ include "docker-template.fullname" . }}-pvc"
-        {{ end }}
-        {{ end }}
-        {{ if .Values.emptyDir.enabled }}
-        - name: "{{ include "docker-template.fullname" . }}-empty-dir-storage"
-          emptyDir:
-            {{- toYaml .Values.emptyDir.volumeOptions | nindent 12 }}
-        {{ end }}
-        {{ if .Values.awsEfsStorage }}
-        {{- range $v := .Values.awsEfsStorage }}
-        - name: efs-{{ $.Values.fullnameOverride }}
-          persistentVolumeClaim:
-            claimName: efs-{{ $.Values.fullnameOverride }}
-        {{ end }}
-        {{ end }}
-        {{ if .Values.fileSecretMounts.enabled }}
-        {{ range .Values.fileSecretMounts.mounts }}
-        - name: {{ .mountPath }}
-          secret:
-            secretName: "{{ .secretName }}"
-        {{ end }}
-        {{ end }}
-      {{ end }}
-{{- end }}

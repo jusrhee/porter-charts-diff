@@ -28,14 +28,7 @@ If release name contains chart name it will be used as a full name.
 Create chart name and version as used by the chart label.
 */}}
 {{- define "docker-template.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" | trimSuffix "."}}
-{{- end }}
-
-{{/*
-Generate a KEDA ScaledObject's HPA name(only meant for B/G deployments)
-*/}}
-{{- define "docker-template.kedaHpa" -}}
-{{- printf "keda-hpa-%s-%s" .name .tag }}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
@@ -66,41 +59,5 @@ Create the name of the service account to use
 {{- default (include "docker-template.fullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
-{{- end }}
-{{- end }}
-
-{{/*
-Name of the service account json secret to use with the CloudSQL proxy
-*/}}
-{{- define "cloudsql.serviceAccountJSONSecret" -}}
-{{- default (printf "cloudsql-secret-%s" (include "docker-template.fullname" .)) .Values.cloudsql.serviceAccountJSONSecret }}
-{{- end }}
-
-
-{{/* 
-The connection string to be passed to the CloudSQL proxy.
-For backwards compatibility, this concatenates targets from cloudsql.connectionName/dbPort, cloudsql.additionalConnection.connectionName/dbPort in addition to the cloudsql.connections list
-*/}}
-{{- define "cloudsql.connectionString" -}}
-{{- $singleConnection := .Values.cloudsql.connectionName -}}
-{{- $additionalConnection := .Values.cloudsql.additionalConnection -}}
-{{- $connections := default (list) .Values.cloudsql.connections -}}
-{{- $hasConnections := or $singleConnection (gt (len $connections) 0) $additionalConnection.enabled -}}
-{{- if $hasConnections -}}
-    
-    {{- if $singleConnection -}}
-        {{- $singleConnection -}}=tcp:{{.Values.cloudsql.dbPort }}
-    {{- end -}}
-
-    {{- if $additionalConnection.enabled -}}
-        {{- if $singleConnection }},{{ end -}}
-        {{ $additionalConnection.connectionName }}=tcp:{{ $additionalConnection.dbPort }}
-    {{- end -}}
-
-    {{- range $index, $conn := $connections -}} 
-        {{- if or $index $singleConnection $additionalConnection.enabled }},{{ end -}}
-        {{ $conn.name }}=tcp:{{ $conn.port }}
-    {{- end -}}
-
 {{- end }}
 {{- end }}

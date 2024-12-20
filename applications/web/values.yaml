@@ -6,15 +6,6 @@ auto_deploy: true
 
 replicaCount: 1
 
-topology: 
-  enabled: false
-  maxSkew:
-  topologyKey:
-  whenUnsatisfiable:
-  labelSelector: 
-    enabled: false
-    matchLabels: {}
-
 terminationGracePeriodSeconds: 30
 
 image:
@@ -22,10 +13,6 @@ image:
   pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
   tag: latest
-  # A single imagePullSecret that will be injected into the deployment; only use in extreme cases, else it must be left blank. 
-  imagePullSecret:
-
-podLabels: {}
 
 serviceAccount:
   # Specifies whether a service account should be created
@@ -39,150 +26,47 @@ serviceAccount:
 service:
   port: 80
 
-additionalServices: []
-
-statefulset:
-  enabled: false
-
 ingress:
   enabled: true
-  hosts: []
-  porter_hosts: []
-  provider: aws
-  custom_domain: false
-  custom_paths: []
-  rewriteCustomPathsEnabled: true
-  annotations: {}
-  wildcard: false
-  tls: true
-  useDefaultIngressTLSSecret: false
-  separateTlsPerCustomDomain: true
-  customTls:
+  defaultHeaders:
+    request:
+      remove:
+        - x-forwarded-host
+  maintenance:
     enabled: false
-    customTlsSecret:
-
-multipleWildcardIngress:
-  enabled: false
-  ingressClass: nginx
-  # hosts contains a list of objects, each object contains a hostName and a tlsSecret
-  # Leave tlsSecret blank ONLY if you want to allow Ingress for a specific host without TLS
   hosts: []
-  custom_domain: true
-  rewriteCustomPathsEnabled: true
-  annotations: {}
-
-albIngress:
-  enabled: false
-  external_dns: false
-  ssl_policy: ELBSecurityPolicy-2016-08
-  hosts: []
-  certificate_arn:
-  custom_paths: []
-  group_name:
-  group_order:
-  target_type: ip
-  scheme: internet-facing
-  security_groups:
-  wafv2_acl_arn:
-  healthcheck_path:
-  healthcheck_interval_seconds:
-  healthcheck_timeout_seconds:
-  healthcheck_success_codes:
-  healthcheck_healthy_threshold_count:
-  healthcheck_unhealthy_threshold_count:
-  healthcheck_port:
-  healthcheck_protocol:
-  target_node_labels:
-  annotations:
-
-privateIngress:
-  enabled: false
-  privateIngressClass:
-  hosts: []
-  custom_paths: []
-  annotations: {}
-  tls: false
-  clusterIssuer: letsencrypt-prod-private
-
+httpTimeout: "30s"
 container:
-  port: 80
-  command:
-  # Deprecated: use argList instead
+  port: 8080
+  command: ""
   args:
-  argList: []
   env:
     normal:
   lifecycle:
     postStart:
-    preStop:
+    preStop: sleep 20
 
 resources:
   requests:
     cpu: 100m
     memory: 256Mi
-  setCPULimits: false
-  limits: {}
 
 autoscaling:
   enabled: false
-  gpu: false
   minReplicas: 1
   maxReplicas: 10
   targetCPUUtilizationPercentage: 50
   targetMemoryUtilizationPercentage: 50
-  targetGPUUtilizationPercentage: 100
-  targetGPUMemoryUtilizationRatio: 1
-  behavior:
-    enabled: false
-    scaleDown:
-      periodSeconds: 600
-      type: Pods
-      value: 1
-    scaleUp:
-      periodSeconds: 60
-      type: Pods
-      value: 1
-
-keda:
-  enabled: false
-  pollingInterval: 30
-  cooldownPeriod: 300
-  minReplicaCount: 1
-  maxReplicaCount: 10
-  fallback:
-    failureThreshold: 3
-    failureReplicas: 6
-  hpa:
-    scaleUp:
-      stabilizationWindowSeconds: 300
-      policy:
-        type: Percent
-        value: 10
-        periodSeconds: 300
-    scaleDown:
-      stabilizationWindowSeconds: 300
-      policy:
-        type: Percent
-        value: 10
-        periodSeconds: 300
-  trigger:
-    metricName: ""
-    metricType: AverageValue
-    metricQuery: ""
-    metricThreshold: ""
-  triggers: []
 
 health:
   livenessProbe:
     enabled: false
     path: "/livez"
+    port: http
     scheme: "HTTP"
-    initialDelaySeconds: 15
     periodSeconds: 5
+    failureThreshold: 3
     timeoutSeconds: 1
-    successThreshold: 1
-    failureThreshold: 15
-    httpHeaders: []
     auth:
       enabled: false
       username: ""
@@ -191,122 +75,137 @@ health:
   livenessCommand:
     enabled: false
     command: "ls -l"
-    initialDelaySeconds: 10
     periodSeconds: 5
-    timeoutSeconds: 1
-    successThreshold: 1
-    failureThreshold: 8
+    initialDelaySeconds: 5
 
   readinessProbe:
     enabled: false
-    path: "/readyz"
+    path: "/health_check"
+    port: http
     scheme: "HTTP"
-    initialDelaySeconds: 15
+    failureThreshold: 3
     periodSeconds: 5
     timeoutSeconds: 1
-    successThreshold: 1
-    failureThreshold: 15
-    httpHeaders: []
     auth:
       enabled: false
       username: ""
       password: ""
 
   startupProbe:
-    enabled: false
-    path: "/startupz"
+    enabled: true
+    path: "/health_check"
+    port: http
     scheme: "HTTP"
-    failureThreshold: 3
+    failureThreshold: 10
     periodSeconds: 5
     timeoutSeconds: 1
-    httpHeaders: []
     auth:
       enabled: false
       username: ""
       password: ""
 
-podDisruptionBudget:
-  enabled: false
-
-pvc:
-  enabled: false
-  storage: 20Gi
-  mountPath: /mypath
-  existingVolume: ""
-
-cloudsql:
-  enabled: false
-  connections: []
-    # - name: "abcdedfg"
-    #   port: 34343
-  connectionName: "" # deprecated, keeping for backwards compatibility. use connections instead.
-  dbPort: 5432
-  serviceAccountJSON: ""
-  serviceAccountJSONSecret: ""
-  additionalConnection: # deprecated, keeping for backwards compatibility. use connections instead. 
-    enabled: false
-    dbPort: 5432
-    connectionName: ""
-
-datadog:
-  enabled: false
-
-datadogSocketVolume:
-  enabled: false
-
-# Set this to add entries to the /etc/hosts file
-# Format: hostAliases: [{ip: <IP>, hostnames: [<HOSTNAME>,..]},..]
-hostAliases: []
-
-# Set this for enabling DNS extensions over TCP
-# We enable this by default.
-enableEDNS0: true
-
 nodeSelector: {}
 
-tolerations: []
+podSecurityContext:
+  sysctls:
+    - name: net.ipv4.tcp_keepalive_time
+      value: "120"
+    - name: net.ipv4.tcp_keepalive_intvl
+      value: "60"
+    - name: net.ipv4.tcp_keepalive_probes
+      value: "3"
+  runAsNonRoot: true
+  runAsUser: 10000
+  runAsGroup: 10000
+  fsGroup: 10000
 
-bluegreen:
-  enabled: false
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  runAsNonRoot: true
+  runAsUser: 10000
+  runAsGroup: 10000
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - all
 
-  # if this is set to true, the main deployment won't render and the service selector will use the
-  # activeImageTag. For zero-downtime updates, set this to false until the new deployments are created,
-  # and then set this to true.
-  disablePrimaryDeployment: false
+datadog:
+  service: my_app
+  env: test
 
-  # if bluegreen is enabled, set the activeImageTag and the list of imageTags
-  # activeImageTag: mytag1
-  imageTags: []
-  # imageTags:
-  # - mytag1
-  # - mytag2
+podLabels:
+  admission.datadoghq.com/enabled: "true"
 
-customNodePort:
-  enabled: false
-  port: 30000
+podAnnotations:
+  ad.datadoghq.com/istio-proxy.check_names: '["istio", "envoy"]'
+  ad.datadoghq.com/istio-proxy.init_configs: "[{}, {}]"
+  ad.datadoghq.com/istio-proxy.instances: |
+    [
+      {
+        "use_openmetrics": true,
+        "send_histograms_buckets": true,
+        "tag_by_endpoint": true,
+        "istio_mesh_endpoint": "http://%%host%%:15090/stats/prometheus",
+        "exclude_labels": [
+          "source_version",
+          "destination_version",
+          "source_canonical_revision",
+          "destination_canonical_revision",
+          "source_principal",
+          "destination_principal",
+          "source_cluster",
+          "destination_cluster",
+          "source_canonical_service",
+          "destination_canonical_service",
+          "source_workload_namespace",
+          "destination_workload_namespace",
+          "request_protocol",
+          "connection_security_policy"
+        ]
+      },
+      {
+        "openmetrics_endpoint": "http://%%host%%:15090/stats/prometheus"
+      }
+    ]
 
-stack:
-  enabled: false
-  name: ""
-  revision: 0
+httpTimeout: 30s
 
-emptyDir:
-  enabled: false
-  mountPath: /mypath
-  volumeOptions: {}
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
 
-priorityClassName: ""
+volumes:
+  emptyDir:
+    - name: tmp
+      mountPaths:
+        - /workspace/tmp
+        - /tmp
 
-# set this to mount files from a secret into the container at /etc/secrets/<mountPath>
-# Format: fileSecretMounts: [{secretName: <SECRET_NAME>, mountPath: <MOUNT_PATH>},..]
-fileSecretMounts:
-  enabled: false
-  mounts: []
+istio:
+  additionalHttpMatchers:
+  telemetry:
+    accessLogging:
+      provider: envoy
+  sidecar:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "32"
+        memory: 128Mi
+  init:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "32"
+        memory: 128Mi
 
-nodeGroups: []
-
-
-metricsScraping:
-  enabled: false
-  port: 80
-  path: "/metrics"
+sidekiq:
+  ui:
+    enabled: false

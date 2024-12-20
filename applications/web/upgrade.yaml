@@ -1,19 +1,11 @@
 upgrade_notes:
-  - previous: v0.11.0
-    target: v0.12.0
-    note: |
-      `v0.11.0` added support for configuring the time interval of the readiness probe. This sets the period between successive readiness probe queries on the health check endpoint. This update is backwards-compatible.
-  - previous: v0.12.0
-    target: v0.13.0
-    note: |
-      `v0.13.0` added support for displaying the revision numbers attached to each pod in the Porter dashboard, by passing the revision number to the pod metadata. This update is backwards-compatible.
-  - previous: v0.13.0
-    target: v0.14.0
-    note: |
-      `v0.14.0` fixed the parsing issue on the `PORTER_POD_IMAGE_TAG` variable that's injected into the container.
   - previous: v0.39.0
     target: v0.40.0
     note: |
       **WARNING**: this may not be backwards compatible with your configuration.
 
       `v0.40.0` fixes an issue where not setting the liveness probe health check prevents other health checks from being enabled. If you have health checks enabled, please double-check the **Advanced** tab after upgrading and make sure your health checks are set correctly.
+  - previous: v0.30.0
+    target: v0.44.0
+    note: |
+      * carerev fork initial changes

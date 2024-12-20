@@ -1,5 +1,5 @@
 name: Web
-hasSource: true
+hasSource: registry-only
 tabs:
   - name: main
     label: Main
@@ -22,6 +22,8 @@ tabs:
             label: Start Command
             placeholder: "ex: sh ./script.sh"
             variable: container.command
+            settings:
+              default: ""
       - name: section_one_cont
         contents:
           - type: subtitle
@@ -29,9 +31,9 @@ tabs:
           - type: number-input
             variable: container.port
             label: Container Port
-            placeholder: "ex: 80"
+            placeholder: "ex: 8080"
             settings:
-              default: 80
+              default: 8080
           - type: heading
             label: Deploy Webhook
           - type: checkbox
@@ -45,48 +47,62 @@ tabs:
             label: Network Settings
           - type: subtitle
             label: For containers that you do not want to expose to external traffic (e.g. databases and add-ons), you may make them accessible only to other internal services running within the same cluster.
-          - type: subtitle
-            label: "Important: The HTTPS issuer must be installed for *.porter.run domains to work."
           - type: checkbox
             variable: ingress.enabled
             label: Expose to external traffic
             settings:
               default: true
-      - name: domain_toggle
-        show_if: ingress.enabled
-        contents:
-          - type: subtitle
-            label: Assign custom domain to your deployment. You must first create an A record in your domain provider that points to your cluster load balancer's IP address for this.
-          - type: checkbox
-            variable: ingress.custom_domain
-            label: Configure Custom Domain
-            settings:
-              default: false
       - name: domain_name
-        show_if: ingress.custom_domain
+        show_if: ingress.enabled
         contents:
           - type: array-input
             variable: ingress.hosts
             label: Domain Name
-      - name: ingress_tls_enabled
-        show_if: ingress.custom_domain
-        contents:
-          - type: checkbox
-            variable: ingress.tls
-            label: Enable TLS and automatically create certificates
             settings:
-              default: true
-      - name: do_wildcard
-        show_if:
-          and:
-            - ingress.custom_domain
-            - currentCluster.service.is_do
+              required: true
+      - name: cert_issuer
+        show_if: ingress.enabled
         contents:
           - type: subtitle
-            label: If you're hosting on Digital Ocean and have enabled the wildcard domains from the 'HTTPS Issuer', you can use a wildcard certificate.
-          - type: checkbox
-            variable: ingress.wildcard
-            label: Use Wildcard Certificate
+            label: The cert-manager issuer. Don't typically need to change.
+          - type: string-input
+            variable: certIssuer
+            label: Cert Issuer
+            settings:
+              required: true
+              default: "letsencrypt-prod"
+      - name: http_timeout
+        contents:
+          - type: subtitle
+            label: The amount of time in seconds before a http request is aborted.
+          - type: number-input
+            variable: httpTimeout
+            label: HTTP Timeout
+            settings:
+              unit: s
+              required: true
+              default: "30"
+  - name: datadog
+    label: Datadog
+    sections:
+      - name: main_section
+        contents:
+          - type: heading
+            label: Datadog
+          - type: subtitle
+            label: Configure Datadog settings. These are used as tags in datadog eg env:int service:my_app.
+          - type: string-input
+            label: Datadog Service (DD_SERVICE and tags.datadoghq.com/service)
+            placeholder: "ex: my_app"
+            variable: datadog.service
+            settings:
+              required: true
+          - type: string-input
+            label: Datadog Env  (DD_ENV and tags.datadoghq.com/env)
+            placeholder: "ex: int"
+            variable: datadog.env
+            settings:
+              required: true
   - name: resources
     label: Resources
     sections:
@@ -96,11 +112,14 @@ tabs:
             label: Resources
           - type: subtitle
             label: Configure resources assigned to this container.
+          - type: heading
+            label: Requests
           - type: number-input
             label: RAM
             variable: resources.requests.memory
             placeholder: "ex: 256"
             settings:
+              required: true
               unit: Mi
               default: 256
           - type: number-input
@@ -108,6 +127,7 @@ tabs:
             variable: resources.requests.cpu
             placeholder: "ex: 100"
             settings:
+              required: true
               unit: m
               default: 100
           - type: number-input
@@ -115,6 +135,7 @@ tabs:
             variable: replicaCount
             placeholder: "ex: 1"
             settings:
+              required: true
               default: 1
           - type: checkbox
             variable: autoscaling.enabled
@@ -162,21 +183,11 @@ tabs:
           - type: subtitle
             label: Set environment variables for your secrets and environment-specific configuration.
           - type: env-key-value-array
-            label: ""
+            label:
             variable: container.env
   - name: advanced
     label: Advanced
     sections:
-      - name: ingress_annotations
-        contents:
-          - type: heading
-            label: Ingress Custom Annotations
-          - type: subtitle
-            label: Assign custom annotations to Ingress. These annotations will overwrite the annotations Porter assigns by default.
-          - type: key-value-array
-            variable: ingress.annotations
-            settings:
-              default: {}
       - name: health_check
         contents:
           - type: heading
@@ -198,10 +209,17 @@ tabs:
           - type: string-input
             label: Startup Check Endpoint
             variable: health.startupProbe.path
-            placeholder: "ex: /startupz"
+            placeholder: "ex: /health_check"
             settings:
               required: true
-              default: /startupz
+              default: /health_check
+          - type: string-input
+            variable: health.startupProbe.port
+            label: Startup Probe Port
+            placeholder: "ex: http"
+            settings:
+              required: true
+              default: http
           - type: heading
             label: Custom Startup Check Rules
           - type: subtitle
@@ -222,7 +240,7 @@ tabs:
             variable: health.livenessProbe.enabled
             label: Enable Liveness Probe
             settings:
-              default: false   
+              default: false
       - name: liveness_check_endpoint
         show_if: health.livenessProbe.enabled
         contents:
@@ -231,10 +249,17 @@ tabs:
           - type: string-input
             label: Liveness Check Endpoint
             variable: health.livenessProbe.path
-            placeholder: "ex: /livez"
+            placeholder: "ex: /health_check"
             settings:
               required: true
-              default: /livez
+              default: /health_check
+          - type: string-input
+            variable: health.livenessProbe.port
+            label: Liveness Probe Port
+            placeholder: "ex: http or 9393"
+            settings:
+              required: true
+              default: http
           - type: heading
             label: Custom Liveness Check Rules
           - type: subtitle
@@ -255,7 +280,7 @@ tabs:
             label: Enable Readiness Probe
             variable: health.readinessProbe.enabled
             settings:
-              default: false  
+              default: false
       - name: readiness_probe
         show_if: health.readinessProbe.enabled
         contents:
@@ -266,23 +291,29 @@ tabs:
           - type: string-input
             label: Readiness Probe Endpoint
             variable: health.readinessProbe.path
-            placeholder: "/healthz"
             settings:
-              default: /readyz
+              default: /health_check
+          - type: string-input
+            variable: health.readinessProbe.port
+            label: Readiness Probe Port
+            placeholder: "ex: http"
+            settings:
+              required: true
+              default: http
+          - type: heading
+            label: Custom Readiness Check Rules
+          - type: subtitle
+            label: Configure how many times a readiness check will be performed before deeming the container as failed.
+          - type: number-input
+            label: Failure Threshold
+            variable: health.readinessProbe.failureThreshold
+            placeholder: "ex: 3"
+          - type: subtitle
+            label: Configure the interval at which readiness check is repeated in the case of failure.
           - type: number-input
             label: Repeat Interval
             variable: health.readinessProbe.periodSeconds
             placeholder: "ex: 30"
-            settings:
-              default: 5
-          - type: number-input
-            label: Initial Delay Threshold
-            variable: health.readinessProbe.initialDelaySeconds
-            placeholder: "ex: 30"
-            settings:
-              default: 0
-          - type: subtitle
-            label: The number of seconds the readiness probe will wait before first executing after pod startup. If startup probe is enabled, this will start after startup probe has completed.              
       - name: termination_grace_period
         contents:
           - type: heading
@@ -309,32 +340,25 @@ tabs:
             label: Pre stop command
             placeholder: "ex: /bin/sh ./myscript.sh"
             variable: container.lifecycle.preStop
-      - name: cloud_sql_toggle
-        show_if: currentCluster.service.is_gcp
+      - name: maintenance_page
         contents:
           - type: heading
-            label: Google Cloud SQL
+            label: Maintenance Mode Settings
           - type: subtitle
-            label: Securely connect to Google Cloud SQL (GKE only).
+            label: Maintenance Page will be displayed instead of your app page
           - type: checkbox
-            variable: cloudsql.enabled
-            label: Enable Google Cloud SQL Proxy
+            variable: ingress.maintenance.enabled
+            label: Enable
             settings:
               default: false
-      - name: cloud_sql_contents
-        show_if: cloudsql.enabled
+      - name: sidekiq_ui
         contents:
-          - type: string-input
-            label: Instance Connection Name
-            variable: cloudsql.connectionName
-            placeholder: "ex: project-123:us-east1:pachyderm"
-          - type: number-input
-            label: DB Port
-            variable: cloudsql.dbPort
-            placeholder: "ex: 5432"
+          - type: heading
+            label: Sidekiq UI
+          - type: subtitle
+            label: Configures authentication for sidekiq ui. Make sure you serve /sidekiq from your app without additional auth.
+          - type: checkbox
+            variable: sidekiq.ui.enabled
+            label: Enable
             settings:
-              default: 5432
-          - type: string-input
-            label: Service Account JSON
-            variable: cloudsql.serviceAccountJSON
-            placeholder: "ex: { <SERVICE_ACCOUNT_JSON> }"
+              default: false

@@ -1,39 +1,12 @@
-{{- if not .Values.bluegreen.enabled -}}
 {{- if .Values.autoscaling.enabled }}
-{{- if $.Capabilities.APIVersions.Has "autoscaling/v2" }}
 apiVersion: autoscaling/v2
-{{- else }}
-apiVersion: autoscaling/v2beta2
-{{- end }}
 kind: HorizontalPodAutoscaler
 metadata:
   name: {{ include "docker-template.fullname" . }}
-  annotations:
-    validations.keda.sh/hpa-ownership: "false"
 spec:
-  {{- if .Values.autoscaling.behavior.enabled }}
-  behavior:
-    scaleDown:
-      stabilizationWindowSeconds: {{ .Values.autoscaling.behavior.scaleDown.stabilizationWindowSeconds | default 60 }}
-      policies:
-      - type: {{ .Values.autoscaling.behavior.scaleDown.type }}
-        value: {{ .Values.autoscaling.behavior.scaleDown.value }}
-        periodSeconds: {{ .Values.autoscaling.behavior.scaleDown.periodSeconds }}
-    scaleUp:
-      stabilizationWindowSeconds: {{ .Values.autoscaling.behavior.scaleUp.stabilizationWindowSeconds | default 60 }}
-      policies:
-      - type: {{ .Values.autoscaling.behavior.scaleUp.type }}
-        value: {{ .Values.autoscaling.behavior.scaleUp.value }}
-        periodSeconds: {{ .Values.autoscaling.behavior.scaleUp.periodSeconds }}
-  {{- end }}
   scaleTargetRef:
-    {{- if and (.Values.deploymentStrategy) (eq .Values.deploymentStrategy.kind "blueGreen") }}
-    apiVersion: argoproj.io/v1alpha1
-    kind: Rollout
-    {{- else }}
     apiVersion: apps/v1
     kind: Deployment
-    {{- end }}
     name: {{ include "docker-template.fullname" . }}
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
@@ -53,26 +26,5 @@ spec:
         target:
           type: Utilization
           averageUtilization: {{ . }}
-{{- end }}
-{{- if .Values.autoscaling.gpu }}
-  {{- with .Values.autoscaling.targetGPUUtilizationPercentage }}
-    - type: Pods
-      pods:
-        metric:
-          name: gpu_utilization
-        target:
-          type: AverageValue
-          averageValue: {{ . }}
-    {{- end }}
-    {{- with .Values.autoscaling.targetGPUMemoryUtilizationRatio }}
-    - type: Pods
-      pods:
-        metric:
-          name: gpu_memory_utilization_ratio
-        target:
-          type: AverageValue
-          averageValue: {{ . }}
-    {{- end }}
-{{- end }}
 {{- end }}
 {{- end }}

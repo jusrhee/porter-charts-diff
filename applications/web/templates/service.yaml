@@ -3,91 +3,27 @@ kind: Service
 metadata:
   name: {{ include "docker-template.fullname" . }}
   labels:
-    porter.run/tailscale-svc: "true"
     {{- include "docker-template.labels" . | nindent 4 }}
-    {{- if .Values.labels }}
-    {{- toYaml .Values.labels | nindent 4 }}
-    {{- end }}
-  {{- if or .Values.metricsScraping.enabled (and .Values.service.annotations (gt (len .Values.service.annotations) 0)) }}
+  {{- if .Values.service.annotations }}
+  {{- if gt (len .Values.service.annotations) 0}}
   annotations:
-    {{- if .Values.metricsScraping.enabled }}
-    porter.prometheus/scrape: "true" 
-    porter.prometheus/port: {{ .Values.metricsScraping.port | quote }}
-    porter.prometheus/path: {{ .Values.metricsScraping.path | quote }}
-    porter.prometheus/scheme: "http"
-    {{- end }}
-    {{- if and .Values.service.annotations (gt (len .Values.service.annotations) 0) }}
     {{- range $k, $v := .Values.service.annotations }}
-    {{ $k }}: {{ $v | quote }}
-    {{- end }}
+    {{ $k }}: {{ $v }}
     {{- end }}
   {{- end }}
+  {{- end }}
 spec:
-  {{ if or .Values.ingress.enabled .Values.albIngress.enabled .Values.customNodePort.enabled }}
-  type: NodePort
-  {{ else }}
   type: ClusterIP
-  {{ end }}
   ports:
     - port: {{ .Values.service.port }}
       targetPort: http
       protocol: TCP
       name: http
-      {{- if and .Release.IsUpgrade (not .Values.ingress.enabled) }}
-      nodePort: null
-      {{- else if .Values.customNodePort.enabled }}
-      nodePort: {{ .Values.customNodePort.port }}
-      {{- end }}
-  {{- if and .Values.metricsScraping.enabled (ne .Values.metricsScraping.port .Values.service.port) }}
-    # add metrics scraping port if metrics scraping is enabled and the port is not the same as the service port
-    - port: {{ .Values.metricsScraping.port }}
-      targetPort: metrics
-      protocol: TCP
-      name: metrics
-  {{- end }}
   {{- range .Values.service.extraPorts }}
     - port: {{ .port }}
       targetPort: {{ .targetPort }}
       protocol: TCP
       name: {{ .name }}
-      {{- if and $.Release.IsUpgrade (not $.Values.ingress.enabled) }}
-      nodePort: null
-      {{- end }}
   {{- end }}
   selector:
     {{- include "docker-template.selectorLabels" . | nindent 4 }}
-    {{- if and .Values.bluegreen.enabled .Values.bluegreen.disablePrimaryDeployment (.Values.bluegreen.imageTags | len | eq 0 | not) }}
-    porter.run/blue-green-value: {{ .Values.bluegreen.activeImageTag | quote }}
-    {{- end }}
-{{- range $service := .Values.additionalServices }}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "docker-template.fullname" $ }}-{{ $service.suffix }}
-  labels:
-    {{- include "docker-template.labels" $ | nindent 4 }}
-    {{- if $.Values.labels }}
-    {{- toYaml $.Values.labels | nindent 4 }}
-    {{- end }}
-    {{- if $service.labels }}
-    {{- toYaml $service.labels | nindent 4 }}
-    {{- end }}
-  {{- if $service.annotations }}
-  {{- if gt (len $service.annotations) 0}}
-  annotations:
-    {{- range $k, $v := $service.annotations }}
-    {{ $k }}: {{ $v | quote }}
-    {{- end }}
-  {{- end }}
-  {{- end }}
-spec:
-  type: {{ $service.type }}
-  ports:
-    - port: {{ $service.port }}
-      targetPort: http
-      protocol: TCP
-      name: https
-  selector:
-    {{- include "docker-template.selectorLabels" $ | nindent 4 }}
-{{- end }}
